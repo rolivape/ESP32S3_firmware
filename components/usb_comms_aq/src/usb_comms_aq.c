@@ -4,9 +4,11 @@
  */
 
 #include "usb_comms_aq.h"
+#include <string.h>
 #include "esp_log.h"
 #include "esp_event.h"
 #include "esp_mac.h"
+#include "esp_efuse.h"
 #include "esp_netif.h"
 #include "tinyusb.h"
 #include "tinyusb_net.h"
@@ -72,22 +74,30 @@ esp_err_t usb_comms_start(void) {
     // --- Initialize TinyUSB ---
     ESP_LOGI(TAG, "Initializing TinyUSB stack...");
     
-    // Get MAC address from eFuse
+    // --- MAC Address Configuration ---
+    // Per design, generate a locally administered MAC address from the base eFuse MAC.
     uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    mac[0] |= 0x02; // Set local bit
-    ESP_LOGI(TAG, "Using MAC address: %02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    esp_err_t err = esp_efuse_mac_get_default(mac);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get base MAC address from eFuse, using static MAC. Error: %s", esp_err_to_name(err));
+        // Fallback to a static MAC address as per resilience requirements
+        const uint8_t static_mac[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
+        memcpy(mac, static_mac, sizeof(mac));
+    } else {
+        // Set as a locally administered address (second-least significant bit of the first octet)
+        mac[0] |= 0x02;
+    }
+
+    ESP_LOGI(TAG, "Generated MAC: %02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     // Set MAC address for the netif
     ESP_ERROR_CHECK(esp_netif_set_mac(s_netif_aq, mac));
 
     tinyusb_net_config_t net_config = {
-        .mac_addr = {mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]},
-        .on_recv_callback = usb_net_rx_callback,
         .user_context = s_netif_aq,
-        .free_tx_buffer = NULL,
-        .on_init_callback = NULL,
+        .on_recv_callback = usb_net_rx_callback,
     };
+    memcpy(net_config.mac_addr, mac, sizeof(net_config.mac_addr));
     ESP_ERROR_CHECK(tinyusb_net_init(TINYUSB_USBDEV_0, &net_config));
 
     const tinyusb_config_t tusb_cfg = {

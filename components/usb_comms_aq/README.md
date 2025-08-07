@@ -13,6 +13,14 @@ This component provides a high-performance USB networking service for ESP32-S3 d
 - **Static IP**: Configured with a default static IP address (`192.168.7.1`) for predictable network access.
 - **Optimized**: Critical callbacks are placed in IRAM to reduce latency.
 
+### MAC Address Generation (v2 Fix)
+
+To enhance stability and ensure device uniqueness, the component automatically generates a **locally administered MAC address** derived from the base MAC address stored in the ESP32-S3's eFuse. This removes the need for manual configuration and prevents MAC address conflicts.
+
+- **Primary Method**: Reads the base MAC from eFuse via `esp_efuse_mac_get_default()`.
+- **Resilience**: If the eFuse cannot be read, it falls back to a pre-defined static MAC address (`02:00:00:00:00:01`) to ensure the network interface can still be initialized.
+- **Logging**: The MAC address used is logged at startup for easy verification (e.g., `Generated MAC: 02:xx:xx:xx:xx:xx`).
+
 ## API
 
 ### `esp_err_t usb_comms_start(void);`
