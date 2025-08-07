@@ -20,6 +20,14 @@ To enhance stability and ensure device uniqueness, the component automatically g
 - **Primary Method**: Reads the base MAC from eFuse via `esp_efuse_mac_get_default()`.
 - **Resilience**: If the eFuse cannot be read, it falls back to a pre-defined static MAC address (`02:00:00:00:00:01`) to ensure the network interface can still be initialized.
 - **Logging**: The MAC address used is logged at startup for easy verification (e.g., `Generated MAC: 02:xx:xx:xx:xx:xx`).
+- **USB Descriptor**: The component is configured via `sdkconfig` (`CONFIG_TINYUSB_DESC_USE_DEFAULT_MAC_STRING=y`) to automatically generate the necessary USB string descriptor for the MAC address. This resolves enumeration errors on the host OS, such as `failed to get mac address`, and ensures the device is correctly identified. Example `lsusb -v` output after the fix:
+  ```
+  ...
+  iManufacturer           1 espressif
+  iProduct                2 ESP32-S3-USB-NCM
+  iSerial                 3 94:B9:7E:F4:48:94
+  ...
+  ```
 
 ## API
 
