@@ -90,26 +90,23 @@ esp_err_t usb_comms_start(void) {
 
     ESP_LOGI(TAG, "Generated MAC: %02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    // Update the MAC address string descriptor
-    static char mac_str[18];
-    sprintf(mac_str, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    string_desc_arr_aq[4] = mac_str;
-
     // Set MAC address for the netif
     ESP_ERROR_CHECK(esp_netif_set_mac(s_netif_aq, mac));
 
+    // --- Initialize TinyUSB ---
+    ESP_LOGI(TAG, "Initializing TinyUSB stack...");
     tinyusb_net_config_t net_config = {
         .user_context = s_netif_aq,
         .on_recv_callback = usb_net_rx_callback,
     };
     memcpy(net_config.mac_addr, mac, sizeof(net_config.mac_addr));
+    ESP_ERROR_CHECK(tinyusb_net_init(TINYUSB_USBDEV_0, &net_config));
 
-    ESP_LOGI(TAG, "Initializing TinyUSB with custom descriptors...");
     const tinyusb_config_t tusb_cfg = {
-        .device_descriptor = &desc_device_aq,
-        .string_descriptor = string_desc_arr_aq,
+        .device_descriptor = NULL,
+        .string_descriptor = NULL,
         .external_phy = false,
-        .configuration_descriptor = desc_configuration_aq,
+        .configuration_descriptor = NULL,
     };
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
 
