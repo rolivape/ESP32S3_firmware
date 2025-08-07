@@ -1,0 +1,13 @@
+# Kconfig for usb_comms_aq component
+
+menu "USB Comms AQ Configuration"
+    depends on TINYUSB_ENABLED
+
+    config COMPONENT_USB_COMMS_AQ_ENABLED
+        bool "Enable USB Comms AQ Service"
+        default y
+        help
+            Enable this option to initialize the USB Communications service,
+            providing an NCM-based network interface.
+
+endmenu

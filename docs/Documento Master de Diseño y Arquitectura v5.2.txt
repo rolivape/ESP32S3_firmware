@@ -1,0 +1,164 @@
+﻿Documento Maestro de Diseño y Arquitectura: Aqua Controller USB
+Versión: 5.2 (Final Merge)
+Fecha: 27 de julio de 2025
+Actualizado por: Chief Programmer & PMO, alineado con la arquitectura de componentes NCM v2.0.
+Nota de Actualización: Esta versión 5.2 actualiza el firmware a ESP-IDF v5.5. Incorpora la arquitectura de componentes desacoplados (app_manager_aq, usb_comms_aq, mqtt_service_aq) como pilar del diseño del firmware. Se formalizan las estrategias de comunicación por eventos, la vinculación explícita de sockets a la interfaz de red USB, y las optimizaciones de IRAM, alineando el proyecto con las mejores prácticas para sistemas de alto rendimiento y mantenibilidad.
+Preámbulo: Propósito y Legado de este Documento
+Este documento es la fuente única de verdad para el proyecto Aqua Controller USB. Preserva la historia, decisiones y arquitectura integral de hardware, software y operaciones. Todo colaborador, humano o IA (Grok 4, Gemini CLI), debe consultarlo antes de cualquier cambio o expansión.
+Observaciones de Chief Programmer & PMO: Documento robusto y bien estructurado. Recomiendo almacenarlo en un repositorio Git con Markdown renderizado. Un changelog integrado rastrea evoluciones, asegurando trazabilidad.
+Capítulo 1: Fundamentos Estratégicos del Proyecto
+1.1. Propósito y Valor Diferencial
+    • Automatización y protección activa de acuarios marinos de alta demanda.
+    • Monitoreo y control local-first: operación sin nube, máxima autonomía.
+    • Prevención de fallos y redundancia: lógica crítica local en cada módulo.
+    • Escalabilidad industrial: modularidad plug & play, actualización sin rediseño.
+    • Auditoría total: logging y documentación de eventos, cambios y errores.
+Observaciones de Chief Programmer & PMO: El enfoque local-first garantiza fiabilidad. Sugiero métricas cuantitativas: uptime >99.9%, latencia MQTT <50ms con NCM, tiempo de respuesta en SAFE MODE <3s. Valor diferencial: integración predictiva con IA local (TensorFlow Lite en RPi5 para detección de anomalías).
+1.2. Narrativa Histórica y Decisiones Fundamentales
+    • Primeros prototipos (Arduino/WiFi, ESP32/MQTT): descartados por latencia y baja robustez.
+    • Migración a USB-NCM (v5.0): red IP sobre USB para MQTT eficiente.
+    • Formalización del motor de reglas: lógica desacoplada del firmware (JSON/DSL).
+    • Actualización a ESP-IDF v5.5 (v5.2): mejoras en ESP32-S3 (IRAM, USB, cache), mbedTLS 3.6.3.
+1.3. Anti-Patrones Documentados
+    • Nunca poner lógica vital en la nube.
+    • Prohibido el uso de WiFi para funciones críticas.
+    • No usar hardware/software propietario o cerrado.
+    • Cualquier bug o workaround se documenta en el changelog.
+    • Los roles y configuraciones siempre se parametrizan, no hardcode.
+    • Evitar sobrecarga de IRAM en ESP32-S3: limitar reglas a 10-15 por módulo, usar PSRAM para buffers.
+    • Evitar dependencias pesadas en firmware (e.g., esp_console) que consuman IRAM crítico.
+1.4. Visión a Largo Plazo
+La plataforma evoluciona hacia mantenimiento predictivo, autoajuste inteligente (IA) y mínima intervención manual. La arquitectura y documentación viva aseguran migrabilidad a nuevas tecnologías sin perder principios fundacionales.
+Capítulo 2: Arquitectura General del Sistema
+2.1. Topología y Componentes
+    • MASTER (RPi 5): Cerebro lógico, motor de reglas, HMI local, broker MQTT.
+    • Paneles (ESP32-S3): Módulos especializados (AC, DC, IO), lógica embebida, SAFE MODE autónomo.
+    • ATLAS_PI (RPi Zero 2W): Hub de sensores científicos, transición a TCP/IP para MQTT.
+    • Expansión futura: Módulos AUX, autoidentificación por USB-NCM.
+2.2. Diagrama Físico/Lógico
+[MASTER RPi 5]
+   | (MQTT Broker, IP: 192.168.7.100)
+[Hub USB]
+   | (NCM Network)
+[PANEL_AC] [PANEL_DC] [PANEL_IO] (IPs: 192.168.7.x)
+   |           |           |
+[Relés AC] [Válvulas DC] [Entradas Digitales]
+   |
+[ATLAS_PI] — [Sensores Atlas] (MQTT Client, IP: 192.168.7.101)
+2.3. Estructura de Alimentación
+    • Fuente Meanwell 12V 10A industrial.
+    • Conversores buck 12V→5V.
+    • Fusibles y diodos TVS por módulo.
+    • Aislamiento galvánico donde aplica.
+Observaciones de Chief Programmer & PMO: Añadir monitoreo de voltaje/corriente en PANEL_DC usando ADC del ESP32-S3, publicando alertas MQTT.
+2.4. Escenarios de Falla y Resiliencia
+    • MASTER: Fallo USB/Broker → paneles entran en SAFE MODE autónomo.
+    • PANEL_AC: Fallo sensor temp → detiene calentadores, alarma local.
+    • PANEL_DC: Sobrecorriente → apaga salidas DC, error crítico.
+    • PANEL_IO: Fallo sensor nivel/fuga → alarma local, bloquea automatización.
+    • ATLAS_PI: Fallo sensor → marca inválido, alerta al MASTER.
+Observaciones de Chief Programmer & PMO: Tiempo de SAFE MODE <3s. Usar watchdog hardware (RTC_WDT en ESP32-S3).
+Capítulo 3: Especificaciones de Hardware y Módulos
+3.1. Resumen de Hardware
+Módulo	MCU/SOC	I/O Principal	Funciones Clave	Consumo Estimado
+MASTER	RPi 5	USB3.0, LAN, HDMI	Motor reglas, HMI, logging, OTA	2.5A @ 5V
+PANEL_AC	ESP32-S3-WROOM	8 relés, 2 DS18B20	Control AC, temp, SAFE MODE térmico	200mA max
+PANEL_DC	ESP32-S3-WROOM	8 MOSFET, 4 PWM	Control DC, bombas/válvulas, SAFE MODE	250mA max
+PANEL_IO	ESP32-S3-WROOM	16 optoentradas	Sensores nivel/fuga, alarmas	150mA max
+ATLAS_PI	RPi Zero 2W	I2C, USB, Ethernet (opcional)	Sensores Atlas, aislamiento galvánico, MQTT	500mA max
+Capítulo 4: Arquitectura de Software y Firmware
+4.1. Arquitectura de Componentes del Firmware (Paneles ESP32-S3)
+El firmware de los paneles sigue un patrón de capas desacoplado para máxima modularidad y mantenibilidad.
++-----------------+
+|    app_main.c   |  (Punto de Entrada)
++-----------------+
+        |
+        v
++-----------------------------+
+|       app_manager_aq        |  (Orquestación y Lógica)
++-----------------------------+
+      |                 |
+      v                 v
++-----------+     +-----------------+
+| usb_comms_aq |    | mqtt_service_aq |  (Servicios Especializados)
++-----------+     +-----------------+
+    • app_manager_aq (Orquestador): Inicializa los servicios, gestiona las dependencias (inyecta el netif de USB en el servicio MQTT) y coordina la lógica de la aplicación y la respuesta a eventos del sistema.
+    • usb_comms_aq (Servicio de Red): Responsable único de la comunicación USB-NCM. Abstrae la complejidad de TinyUSB y provee una interfaz de red esp_netif estándar.
+    • mqtt_service_aq (Servicio de Aplicación): Gestiona la conexión y comunicación MQTT. Es agnóstico a la red y opera sobre el esp_netif que le proporciona el app_manager_aq.
+4.2. Flujo de Inicialización y Ciclo Principal
+    1. Boot y lectura de rol/configuraciones desde NVS.
+    2. app_manager_aq inicia usb_comms_aq para establecer la red USB-NCM.
+    3. Una vez la red está activa, app_manager_aq inicia mqtt_service_aq, pasándole el manejador de la red USB.
+    4. Loop principal: Parseo JSON de reglas, ejecución lógica, reporte periódico (heartbeat MQTT), y manejo de watchdog.
+4.3. Diseño Detallado del Componente usb_comms_aq
+Este componente es el puente entre el hardware USB y la pila TCP/IP.
+    • Eventos de Enlace: Utiliza los callbacks tud_mount_cb y tud_umount_cb de TinyUSB para detectar la conexión/desconexión y notificar al app_manager_aq a través del bus de eventos.
+    • Transmisión (TX): Usa tinyusb_net_send_async() con una cola (xQueue) para gestionar el flujo sin bloquear la tarea principal.
+    • Recepción (RX): Copia los paquetes entrantes a un búfer pbuf de LWIP antes de pasarlos a esp_netif_receive() para desacoplar los búferes.
+    • Concurrencia: Se ejecuta en una tarea dedicada con alta prioridad para minimizar la latencia de red.
+4.4. Estrategia de Optimización de IRAM 🚀
+La IRAM es un recurso crítico. La estrategia para su uso es:
+    1. Medir Primero: Analizar el uso con idf.py size.
+    2. Optimizar por Tamaño: Configurar el compilador a -Os.
+    3. Uso Quirúrgico de IRAM_ATTR: Aplicar el atributo solo a funciones en el hot-path (callbacks de usb_comms_aq, rutinas de interrupción) para minimizar el uso de la IRAM premium.
+    4. Uso de Fragmentos del Enlazador: Como técnica avanzada, usar linker.fragment para colocar código en la SRAM principal si la IRAM se agota.
+4.5. Actualización OTA
+    • Desde MASTER por MQTT/NCM, con verificación SHA256 y rollback.
+4.6. Estructura del Repositorio
+/aqua_controller/
+  master_app/
+  esp32_firmware/
+    components/
+      app_manager_aq/
+      usb_comms_aq/
+      mqtt_service_aq/
+    main/
+      app_main.c
+  atlas_module/
+  ...
+Capítulo 5: Protocolo de Comunicación y Contrato de API
+5.1. Modelo de Comunicación
+    • MQTT sobre USB-NCM/TCP-IP. Heartbeat cada 5s.
+    • Nota Técnica: Para asegurar que el cliente esp-mqtt utilice la interfaz USB-NCM, la implementación debe vincular (bind()) el socket a la dirección IP del esp_netif proporcionado por usb_comms_aq antes de conectar. Esto se logra con setsockopt y la opción IP_BOUND_IF.
+5.2. Catálogo de Comandos JSON
+    • Formato: { "id": "<panel_id>", "api_version": "1.0", "fw_version": "5.2", ... }.
+Capítulo 6: Lógica de Automatización (Motor de Reglas)
+    • Motor declarativo (JSON/YAML) con opción de DSL (Lua).
+    • Triggers, Conditions, Actions.
+    • Gestión de reglas con hot reload y prioridades.
+Capítulo 7: Interfaz y Experiencia de Usuario (HMI)
+    • Dashboard y editor de reglas en el MASTER (RPi5 con Flask).
+    • Alertas con niveles y lógica anti-fatiga.
+Capítulo 8: Persistencia de Datos y Base de Datos
+    • SQLite3 en el MASTER para logging histórico.
+    • Rotación de logs y backups automáticos.
+Capítulo 9: Reglas de Diseño de Software
+9.1. Principios de Diseño
+    • main.c Mínimo: Solo inicializa el sistema y delega al app_manager_aq.
+    • Jerarquía Estricta: Los servicios no se comunican directamente. La comunicación se realiza a través del app_manager_aq o el bus de eventos esp_event.
+    • Inyección de Dependencias: El app_manager_aq es responsable de resolver las dependencias (ej. inyectar el netif_handle en mqtt_service_aq).
+    • Convención de Nombres: Sufijo _aq para componentes y archivos del proyecto.
+    • Configuración Externa: Toda la configuración se gestiona a través de NVS.
+    • SAFE MODE Autónomo: Cada panel debe poder operar de forma segura sin el MASTER.
+    • Tests Automatizados: Pruebas unitarias (Unity) y de integración (Pytest) son obligatorias.
+Capítulo 10: Anexos Técnicos
+10.1. Pinout, Matriz de Alarmas, Procedimientos de Validación
+(Contenido sin cambios)
+10.2. Ejemplo de Regla JSON
+(Contenido sin cambios)
+10.3. Librerías y Componentes Válidos
+    • esp_tinyusb: Para la comunicación USB-NCM. APIs clave incluyen tud_mount_cb, tud_umount_cb para gestionar el estado del enlace.
+    • esp-mqtt: Para la comunicación MQTT. El uso debe incluir la vinculación explícita del socket a la interfaz de red correcta.
+    • nvs_flash: Para la configuración persistente.
+    • cJSON: Para el parseo de reglas y comandos.
+    • esp_task_wdt, esp_rtc_wdt: Para la resiliencia del sistema.
+Changelog
+    • v5.2 (27 de julio de 2025)
+        ◦ Refactorización Arquitectónica: Se adopta formalmente el patrón de diseño app_manager > servicios para el firmware de los paneles.
+        ◦ Actualización a ESP-IDF v5.5: Se valida la compatibilidad y se aprovechan las mejoras en USB, IRAM y estabilidad.
+        ◦ Estrategias Formalizadas: Se documentan explícitamente las estrategias de optimización de IRAM, la vinculación de sockets MQTT y el manejo de eventos de enlace USB.
+    • v5.1 (12 de julio de 2025)
+        ◦ Migración a USB-NCM para paneles.
+        ◦ ATLAS_PI a TCP/IP.
+        ◦ Creación de las Reglas de Diseño de Software.
+
