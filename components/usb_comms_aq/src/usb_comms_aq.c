@@ -9,15 +9,14 @@
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "tinyusb.h"
+#include "tinyusb_net.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "lwip/pbuf.h"
 #include "class/net/ncm.h"
 
 // --- Constants and Globals ---
 static const char *TAG = "USB_COMMS_AQ";
-#define TX_QUEUE_SIZE 10
 #define TASK_STACK_SIZE (4096)
 #define TASK_PRIORITY 5
 
@@ -26,18 +25,15 @@ ESP_EVENT_DEFINE_BASE(USB_NET_EVENTS);
 
 // Static handles
 static esp_netif_t *s_netif_aq = NULL;
-static QueueHandle_t s_tx_queue = NULL;
 static bool s_is_up = false;
 
 // Metrics
 static uint32_t s_rx_packets = 0;
 static uint32_t s_tx_packets = 0;
-static uint32_t s_tx_drops = 0;
-static uint32_t s_tx_retries = 0;
 
 // --- Forward Declarations ---
-static void usb_comms_task(void *pvParameters);
 static esp_err_t netif_transmit_aq(void *h, void *buffer, size_t len);
+static esp_err_t usb_net_rx_callback(void *buffer, uint16_t len, void *ctx);
 
 // --- Public API ---
 
@@ -48,19 +44,11 @@ esp_netif_t* usb_comms_get_netif_handle(void) {
 esp_err_t usb_comms_start(void) {
     ESP_LOGI(TAG, "Starting USB Comms AQ service...");
 
-    // Create the TX queue
-    s_tx_queue = xQueueCreate(TX_QUEUE_SIZE, sizeof(struct pbuf *));
-    if (s_tx_queue == NULL) {
-        ESP_LOGE(TAG, "Failed to create TX queue");
-        return ESP_FAIL;
-    }
-
     // --- Create and configure esp_netif ---
     esp_netif_config_t cfg = ESP_NETIF_DEFAULT_ETH();
     s_netif_aq = esp_netif_new(&cfg);
     if (s_netif_aq == NULL) {
         ESP_LOGE(TAG, "Failed to create esp_netif instance");
-        vQueueDelete(s_tx_queue);
         return ESP_FAIL;
     }
 
@@ -81,14 +69,27 @@ esp_err_t usb_comms_start(void) {
     ESP_ERROR_CHECK(esp_netif_dhcpc_stop(s_netif_aq));
     ESP_ERROR_CHECK(esp_netif_set_ip_info(s_netif_aq, &ip_info));
 
-    // Set MAC address
+    // --- Initialize TinyUSB ---
+    ESP_LOGI(TAG, "Initializing TinyUSB stack...");
+    
+    // Get MAC address from eFuse
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     mac[0] |= 0x02; // Set local bit
+    ESP_LOGI(TAG, "Using MAC address: %02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    // Set MAC address for the netif
     ESP_ERROR_CHECK(esp_netif_set_mac(s_netif_aq, mac));
 
-    // --- Initialize TinyUSB ---
-    ESP_LOGI(TAG, "Initializing TinyUSB stack...");
+    tinyusb_net_config_t net_config = {
+        .mac_addr = {mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]},
+        .on_recv_callback = usb_net_rx_callback,
+        .user_context = s_netif_aq,
+        .free_tx_buffer = NULL,
+        .on_init_callback = NULL,
+    };
+    ESP_ERROR_CHECK(tinyusb_net_init(TINYUSB_USBDEV_0, &net_config));
+
     const tinyusb_config_t tusb_cfg = {
         .device_descriptor = NULL,
         .string_descriptor = NULL,
@@ -96,9 +97,6 @@ esp_err_t usb_comms_start(void) {
         .configuration_descriptor = NULL, // Using default NCM descriptor
     };
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
-
-    // Create the dedicated task for USB communications
-    xTaskCreatePinnedToCore(usb_comms_task, "usb_comms_task", TASK_STACK_SIZE, NULL, TASK_PRIORITY, NULL, 0);
 
     ESP_LOGI(TAG, "USB Comms AQ service started successfully");
     return ESP_OK;
@@ -108,39 +106,26 @@ esp_err_t usb_comms_start(void) {
 
 /**
  * @brief Transmit function for esp_netif.
- *
- * This function is called by the TCP/IP stack when it wants to send a packet.
- * It queues the packet to be sent by the dedicated USB task.
- * This function is in a hot-path but IRAM_ATTR is not applied as per instructions
- * to only apply it to the most critical callbacks.
  */
 static esp_err_t netif_transmit_aq(void *h, void *buffer, size_t len) {
     if (!s_is_up) {
         return ESP_FAIL;
     }
 
-    struct pbuf *p = (struct pbuf *)buffer;
-    // Create a reference to the pbuf to be sent.
-    // The pbuf will be freed once it's transmitted (in tud_network_xmit_cb_aq).
-    pbuf_ref(p);
-
-    if (xQueueSend(s_tx_queue, &p, 0) != pdTRUE) {
-        ESP_LOGW(TAG, "TX queue full, dropping packet");
-        pbuf_free(p); // Free the reference
-        s_tx_drops++;
-        return ESP_FAIL;
+    if (tinyusb_net_send_sync(buffer, len, NULL, portMAX_DELAY) == ESP_OK) {
+        s_tx_packets++;
+        return ESP_OK;
     }
 
-    return ESP_OK;
+    return ESP_FAIL;
 }
 
 // --- TinyUSB Callbacks ---
 
 /**
  * @brief Invoked when USB device is mounted.
- * IRAM_ATTR is applied as this is a critical, time-sensitive callback.
  */
-void IRAM_ATTR tud_mount_cb(void) {
+void tud_mount_cb(void) {
     ESP_LOGI(TAG, "USB device mounted");
     s_is_up = true;
     // Notify the system that the network is up
@@ -150,9 +135,8 @@ void IRAM_ATTR tud_mount_cb(void) {
 
 /**
  * @brief Invoked when USB device is unmounted.
- * IRAM_ATTR is applied as this is a critical, time-sensitive callback.
  */
-void IRAM_ATTR tud_umount_cb(void) {
+void tud_umount_cb(void) {
     ESP_LOGI(TAG, "USB device unmounted");
     s_is_up = false;
     // Notify the system that the network is down
@@ -161,61 +145,20 @@ void IRAM_ATTR tud_umount_cb(void) {
 }
 
 /**
- * @brief Invoked when network data is received from the host.
- * This is a hot-path and is marked with IRAM_ATTR.
+ * @brief Wrapper for receiving network data from TinyUSB.
  */
-bool IRAM_ATTR tud_network_recv_cb(const uint8_t *data, uint16_t size) {
-    if (!s_netif_aq) return false;
-
-    // Allocate a pbuf and copy the received data
-    struct pbuf *p = pbuf_alloc(PBUF_RAW, size, PBUF_POOL);
-    if (p) {
-        memcpy(p->payload, data, size);
-        // Pass the packet to the TCP/IP stack
-        if (esp_netif_receive(s_netif_aq, p->payload, p->len, p) != ESP_OK) {
-            pbuf_free(p);
-        } else {
-            s_rx_packets++;
-        }
+static esp_err_t usb_net_rx_callback(void *buffer, uint16_t len, void *ctx)
+{
+    esp_netif_t *netif = (esp_netif_t *)ctx;
+    if (!netif) {
+        return ESP_FAIL;
     }
-    return true;
-}
 
-/**
- * @brief Invoked when a packet has been successfully transmitted.
- * This is a hot-path and is marked with IRAM_ATTR.
- */
-uint16_t IRAM_ATTR tud_network_xmit_cb(uint8_t *dst, void *ref, uint16_t arg) {
-    struct pbuf *p = (struct pbuf *)ref;
-    memcpy(dst, p->payload, p->len);
-    pbuf_free(p); // Free the pbuf that was transmitted
-    s_tx_packets++;
-    return p->len;
-}
-
-// --- Dedicated USB Task ---
-
-/**
- * @brief Task to handle asynchronous packet transmission.
- *
- * This task waits for packets to appear in the TX queue and sends them
- * over USB using a non-blocking, asynchronous call.
- */
-static void usb_comms_task(void *pvParameters) {
-    struct pbuf *p = NULL;
-
-    for (;;) {
-        // Wait for a packet to be queued
-        if (xQueueReceive(s_tx_queue, &p, portMAX_DELAY) == pdTRUE) {
-            // Wait until the USB host is ready to receive data
-            while (!tud_network_can_xmit(p->tot_len)) {
-                s_tx_retries++;
-                vTaskDelay(pdMS_TO_TICKS(1)); // Small delay to prevent busy-waiting
-            }
-
-            // tud_network_xmit expects a pbuf chain
-            tud_network_xmit(p, 0);
-        }
+    // Pass the packet to the TCP/IP stack
+    if (esp_netif_receive(netif, buffer, len, NULL) != ESP_OK) {
+        return ESP_FAIL;
+    } else {
+        s_rx_packets++;
     }
-    vTaskDelete(NULL);
+    return ESP_OK;
 }
