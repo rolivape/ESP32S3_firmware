@@ -12,9 +12,16 @@
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "sdkconfig.h"
+#include "tusb.h" // Required for descriptor types
+
+// --- Custom USB Descriptors ---
+extern tusb_desc_device_t const desc_device_aq;
+extern uint8_t const desc_configuration_aq[];
+extern char const* string_desc_arr_aq[];
 
 // Event base for USB network events
 ESP_EVENT_DECLARE_BASE(USB_NET_EVENTS);
+
 
 /**
  * @brief Enum for USB network events

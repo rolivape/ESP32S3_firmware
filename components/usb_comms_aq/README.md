@@ -13,21 +13,15 @@ This component provides a high-performance USB networking service for ESP32-S3 d
 - **Static IP**: Configured with a default static IP address (`192.168.7.1`) for predictable network access.
 - **Optimized**: Critical callbacks are placed in IRAM to reduce latency.
 
-### MAC Address Generation (v2 Fix)
+### MAC Address and USB Descriptors
 
-To enhance stability and ensure device uniqueness, the component automatically generates a **locally administered MAC address** derived from the base MAC address stored in the ESP32-S3's eFuse. This removes the need for manual configuration and prevents MAC address conflicts.
+To ensure stable and correct USB enumeration, this component uses a full set of custom USB descriptors defined in `src/tusb_descriptors_aq.c`. This approach provides explicit control over the device's identity and capabilities, resolving potential issues with host OS compatibility.
 
-- **Primary Method**: Reads the base MAC from eFuse via `esp_efuse_mac_get_default()`.
-- **Resilience**: If the eFuse cannot be read, it falls back to a pre-defined static MAC address (`02:00:00:00:00:01`) to ensure the network interface can still be initialized.
-- **Logging**: The MAC address used is logged at startup for easy verification (e.g., `Generated MAC: 02:xx:xx:xx:xx:xx`).
-- **USB Descriptor**: The component is configured via `sdkconfig` (`CONFIG_TINYUSB_DESC_USE_DEFAULT_MAC_STRING=y`) to automatically generate the necessary USB string descriptor for the MAC address. This resolves enumeration errors on the host OS, such as `failed to get mac address`, and ensures the device is correctly identified. Example `lsusb -v` output after the fix:
-  ```
-  ...
-  iManufacturer           1 espressif
-  iProduct                2 ESP32-S3-USB-NCM
-  iSerial                 3 94:B9:7E:F4:48:94
-  ...
-  ```
+- **Device Descriptor**: Identifies the device with a unique Vendor ID (Espressif) and a custom Product ID.
+- **Configuration Descriptor**: Defines the device as a CDC-NCM network interface.
+- **String Descriptors**: Provides human-readable strings for the Manufacturer, Product, and a unique Serial Number derived from the device's eFuse MAC address.
+
+This manual configuration ensures that the MAC address is correctly exposed to the host, fixing the "failed to get mac address" error and guaranteeing a reliable network connection.
 
 ## API
 
