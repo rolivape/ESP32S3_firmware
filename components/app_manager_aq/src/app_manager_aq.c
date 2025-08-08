@@ -6,26 +6,18 @@
 
 static const char *TAG = "APP_MANAGER_AQ";
 
-static void app_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
+static void app_event_handler(void* arg,
+                              esp_event_base_t base,
+                              int32_t          id,
+                              void*            data)
 {
-    if (event_base == USB_NET_EVENTS) {
-        if (event_id == USB_NET_UP) {
-            ESP_LOGI(TAG, "USB network is UP");
-            esp_netif_t *netif = usb_netif_get_handle();
-            if (netif) {
-                /**
-                 * @brief Start the network stack on this interface.
-                 * This action starts the DHCP server (if configured) and allows
-                 * TCP/IP traffic to flow.
-                 */
-                esp_netif_action_start(netif, NULL, 0, NULL);
-            }
-        } else if (event_id == USB_NET_DOWN) {
-            ESP_LOGI(TAG, "USB network is DOWN");
-            esp_netif_t *netif = usb_netif_get_handle();
-            if (netif) {
-                esp_netif_action_stop(netif, NULL, 0, NULL);
-            }
+    if (base == USB_NET_EVENTS && id == USB_NET_UP) {
+        ESP_LOGI(TAG, "USB network is UP");
+
+        esp_netif_t* netif = usb_netif_get_handle();
+        if (netif && !esp_netif_is_netif_up(netif)) {
+            /* Sube la interfaz y arranca DHCP-Server */
+            esp_netif_action_start(netif, NULL, 0, NULL);
         }
     }
 }
@@ -38,7 +30,9 @@ void app_manager_start(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     // Register our custom event handler
-    ESP_ERROR_CHECK(esp_event_handler_register(USB_NET_EVENTS, ESP_EVENT_ANY_ID, &app_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(
+        USB_NET_EVENTS, ESP_EVENT_ANY_ID,
+        app_event_handler, NULL, NULL));
 
     // Start the USB communications service
     ESP_ERROR_CHECK(usb_netif_aq_start());

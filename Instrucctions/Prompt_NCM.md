@@ -1,60 +1,73 @@
-Plantilla_Prompt.md - Instancia para Componente: usb_comms_aq (Corrección de Activación del Servidor DHCP)
 1. Contexto y Alcance
 
 Proyecto: AquaControllerUSB v2.0 (ESP-IDF v5.5, ESP32-S3).
-
 Referencia Principal: Documento Maestro v5.2 y Documento de Diseño USB-NCM v2.0.
+Decisión Estratégica: Se abandona el enfoque de usar TinyUSB directamente. Se mantendrá la dependencia del componente oficial espressif/esp_tinyusb, pero se le inyectarán nuestros descriptores personalizados a través de su API de configuración. Esta es la solución final y canónica.
+Meta: Lograr una base de firmware 100% estable que compile, se ejecute sin crashes y establezca una conexión de red USB-NCM funcional con el host.
 
-Estado actual: El hardware USB enumera correctamente y el host crea la interfaz usb0, pero no recibe una dirección IPv4 porque el servidor DHCP del ESP32 no está activo.
-
-Meta Sprint 1: Tener una red USB-NCM 100% funcional, con asignación dinámica de IP al host.
-
-2. Tarea Específica a Realizar
-Corregir la configuración de esp_netif en usb_comms_aq.c para que automáticamente inicie el servidor DHCP interno cuando la interfaz de red se levante.
-
+2. Tarea Específica a Realizar Refactoriza el componente usb_comms_aq para integrar correctamente los descriptores USB personalizados con el componente esp_tinyusb, resolviendo el conflicto de "múltiples definiciones" y los fallos de inicialización.
 3. Requisitos Técnicos y de Diseño
 
-Localización del error:
+Estructura de Archivos:
 
-En components/usb_comms_aq/src/usb_comms_aq.c, localiza la definición de la estructura esp_netif_inherent_config_t.
+Dentro de components/usb_comms_aq/src/, crea un nuevo archivo llamado usb_descriptors_aq.c.
 
-Corrección Obligatoria:
 
-El campo .flags de dicha estructura debe incluir la bandera ESP_NETIF_DHCP_SERVER. Esto le indica a esp_netif que gestione el ciclo de vida del servidor DHCP por nosotros.
+Implementación en usb_descriptors_aq.c:
 
-Ejemplo de Configuración Deseada:
+Define los arrays de descriptores USB completos como static const:
 
-C
+tusb_desc_device: El descriptor de dispositivo.
+tusb_desc_configuration: El descriptor de configuración, que debe incluir la interfaz CDC-NCM y el descriptor funcional de Ethernet con el campo iMACAddress apuntando a un índice de string (ej. STRID_MAC).
+tusb_string_descriptors: Un array de strings que incluya Fabricante, Producto, Número de Serie y el string de la MAC address.
 
-static esp_netif_inherent_config_t usb_if_inherent_cfg = {
-    .flags = ESP_NETIF_DHCP_SERVER | ESP_NETIF_FLAG_AUTOUP,
-    .ip_info = &ip_info,         // Apuntando a nuestra IP estática 192.168.7.1
-    .if_key  = "USB_NCM_AQ",
-    .if_desc = "AquaController USB NCM",
-    .route_prio = 50
+
+Implementa la lógica para generar dinámicamente el string de la MAC a partir del efuse del chip (esp_read_mac()) y formatearlo como una cadena de 12 caracteres hexadecimales.
+Crea una función de callback tud_descriptor_string_cb() que devuelva el string de la MAC (convertido a UTF-16LE) cuando el host lo solicite.
+
+
+Refactorización en usb_comms_aq.c:
+
+Elimina cualquier implementación de callbacks de bajo nivel (como tud_descriptor_string_cb, etc.) de este archivo. Su lugar es usb_descriptors_aq.c.
+En la función de inicialización, antes de cualquier otra llamada, crea una instancia de tinyusb_config_t.
+Puebla esta estructura con punteros a los descriptores definidos en usb_descriptors_aq.c:
+text// En usb_comms_aq.c
+extern const uint8_t tusb_desc_configuration[]; // Declarar como extern
+// ...
+
+tinyusb_config_t tusb_cfg = {
+    .device_descriptor = NULL, // Opcional, puede usar el por defecto
+    .string_descriptor = NULL, // Opcional, puede usar el por defecto
+    .configuration_descriptor = tusb_desc_configuration, // ¡Este es el más importante!
+    .external_phy = false
 };
-Verificación en sdkconfig:
 
-Asegúrate de que la opción CONFIG_LWIP_DHCPS esté habilitada en menuconfig para que el código del servidor DHCP se incluya en la compilación.
+Llama a tinyusb_driver_install(&tusb_cfg), pasándole esta configuración.
+Procede con la inicialización de la red como antes, llamando a tinyusb_net_init().
 
-Checklist de Verificación (Auto-validación):
 
-[ ] El campo .flags contiene ESP_NETIF_DHCP_SERVER | ESP_NETIF_FLAG_AUTOUP.
+Verificación de Dependencias:
 
-[ ] No hay llamadas manuales a dhcp_server_start(). La gestión es automática.
+Asegúrate de que idf_component.yml tiene la dependencia de espressif/esp_tinyusb.
+Asegúrate de que CMakeLists.txt añade el nuevo archivo src/usb_descriptors_aq.c a la lista de fuentes.
 
-[ ] Después de flashear, el comando sudo dhclient usb0 en el host obtiene una IP en menos de 2 segundos.
 
-[ ] El comando ip addr muestra la interfaz usb0 con una dirección inet 192.168.7.x/24.
 
-4. Formato de Salida Esperado
+4. Criterios de Verificación (Auto-validación)
 
-Bloque de código completo (o un diff claro) para usb_comms_aq.c con la estructura esp_netif_inherent_config_t corregida.
+ El proyecto compila sin errores de "múltiples definiciones".
+ El firmware se ejecuta sin el crash Descriptors config failed.
+ La salida de dmesg en el host es limpia y muestra el registro del driver cdc_ncm.
+ El comando ip addr en el host muestra la interfaz usb0 con una dirección IPv4 asignada por DHCP.
+ El comando ping a la IP del ESP32 funciona correctamente.
 
-Sección final de "Verificación" explicando cómo la corrección cumple con la checklist.
+5. Formato de Salida Esperado
 
-5. Referencias Específicas
+Código completo para los archivos modificados (usb_comms_aq.c, CMakeLists.txt) y el nuevo archivo (usb_descriptors_aq.c).
+Un diff claro en el PR para facilitar la revisión.
+Sección final de "Verificación" con los logs que demuestren el éxito de la implementación.
 
-API esp_netif – Flags y DHCP: docs.espressif.com/projects/esp-idf/en/v5.5/esp32s3/api-reference/network/esp_netif.html
+6. Referencias Específicas
 
-Ejemplo de Referencia: chegewara/usb-netif/usb_netif_ncm.c (GitHub).
+Ejemplo de Referencia: examples/peripherals/usb/device/tusb_custom_device (para ver cómo pasar descriptores a tinyusb_driver_install).
+Documentación de tinyusb_config_t: docs.espressif.com/projects/esp-idf/en/v5.5/esp32s3/api-reference/peripherals/usb_tinyusb.html
