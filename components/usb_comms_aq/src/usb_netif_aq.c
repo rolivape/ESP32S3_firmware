@@ -191,12 +191,12 @@ bool tud_network_recv_cb(const uint8_t *buffer, uint16_t len) {
 void tud_network_link_state_cb(bool itf_up) {
     if (itf_up) {
         ESP_LOGI(TAG, "NCM network link is UP");
-        esp_netif_action_start(s_netif_aq, NULL, 0, NULL);
-        ESP_ERROR_CHECK(esp_netif_dhcps_start(s_netif_aq));
+        // Post event to the app_manager, which will bring the interface up
         esp_event_post(USB_NET_EVENTS, USB_NET_UP, NULL, 0, portMAX_DELAY);
     } else {
         ESP_LOGI(TAG, "NCM network link is DOWN");
         ESP_ERROR_CHECK(esp_netif_dhcps_stop(s_netif_aq));
+        // Post event to the app_manager, which can bring the interface down
         esp_event_post(USB_NET_EVENTS, USB_NET_DOWN, NULL, 0, portMAX_DELAY);
         esp_netif_action_stop(s_netif_aq, NULL, 0, NULL);
     }
@@ -214,4 +214,11 @@ void tud_mount_cb(void) {
 // Invoked when device is unmounted
 void tud_umount_cb(void) {
     ESP_LOGI(TAG, "USB device unmounted");
+}
+
+/**
+ * @brief Gets the handle for the USB network interface.
+ */
+esp_netif_t* usb_netif_get_handle(void) {
+    return s_netif_aq;
 }

@@ -1,6 +1,7 @@
 #include "app_manager_aq.h"
 #include "esp_log.h"
 #include "esp_event.h"
+#include "esp_netif.h"
 #include "usb_netif_aq.h"
 
 static const char *TAG = "APP_MANAGER_AQ";
@@ -10,10 +11,21 @@ static void app_event_handler(void* arg, esp_event_base_t event_base, int32_t ev
     if (event_base == USB_NET_EVENTS) {
         if (event_id == USB_NET_UP) {
             ESP_LOGI(TAG, "USB network is UP");
-            // The IP is static and logged by the driver now.
-            // If dynamic IP or more complex logic is needed, it would be handled here.
+            esp_netif_t *netif = usb_netif_get_handle();
+            if (netif) {
+                /**
+                 * @brief Start the network stack on this interface.
+                 * This action starts the DHCP server (if configured) and allows
+                 * TCP/IP traffic to flow.
+                 */
+                esp_netif_action_start(netif, NULL, 0, NULL);
+            }
         } else if (event_id == USB_NET_DOWN) {
             ESP_LOGI(TAG, "USB network is DOWN");
+            esp_netif_t *netif = usb_netif_get_handle();
+            if (netif) {
+                esp_netif_action_stop(netif, NULL, 0, NULL);
+            }
         }
     }
 }

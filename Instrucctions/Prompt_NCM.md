@@ -1,64 +1,71 @@
-Prompt para Gemini CLI: Tarea de Corrección Final del Sprint 1
-(Formateado con la Plantilla_Prompt.md y alineado al Documento Maestro v5.2 y al diseño USB-NCM v2.0)
+Prompt para Gemini CLI
+(formateado con la Plantilla_Promt.md e integrado al Documento Maestro v5.2 y al diseño USB-NCM v2.0)
 
 1. Contexto y Alcance
 Proyecto: AquaControllerUSB v2.0 (ESP-IDF v5.5, ESP32-S3).
 
 Referencia Principal: Documento Maestro de Diseño y Arquitectura v5.2 y Documento de Diseño USB-NCM v2.0.
 
-Estado Actual:
+Estado actual:
 
-El hardware USB (DWC2 + TinyUSB) ya enumera correctamente en el host.
+usb_comms_aq ya crea la interfaz esp_netif con ESP_NETIF_DHCP_SERVER.
 
-El componente usb_comms_aq crea la interfaz esp_netif y el host la reconoce como usb0.
+El servidor DHCP no se levanta porque la interfaz USB aún no se “sube” después de que el hardware reporta USB_NET_UP.
 
-Problema: El host no recibe una dirección IP porque el servidor DHCP del ESP32 no se está iniciando.
-
-Meta del Sprint 1: Tener una red USB-NCM 100% funcional, con asignación dinámica de IP al host.
+Objetivo Sprint 1: Red USB-NCM completamente funcional con DHCP operativo.
 
 2. Tarea Específica a Realizar
-Corregir la configuración de esp_netif en usb_comms_aq.c para que arranque el servidor DHCP interno del ESP32 en la interfaz de red USB.
+Modificar app_manager_aq para que, al recibir el evento USB_NET_UP, ejecute esp_netif_up() sobre el netif de USB, iniciando así los servicios de red (incl. DHCP server).
 
 3. Requisitos Técnicos y de Diseño
-Localización del Error:
+Localización del cambio:
 
-En components/usb_comms_aq/src/usb_comms_aq.c, busca la instancia de la estructura esp_netif_inherent_config_t.
+Archivo: components/app_manager_aq/app_manager_aq.c
 
-Corrección Obligatoria:
+Función: event_handler_aq() (manejador registrado en el bus USB_NET_EVENTS).
 
-El campo .flags de dicha estructura debe incluir la bandera ESP_NETIF_DHCP_SERVER.
+Implementación obligatoria:
 
-Ejemplo de Configuración Deseada:
 
-// Ejemplo de la configuración correcta para la estructura inherente de esp_netif
-static esp_netif_inherent_config_t usb_if_inherent_cfg = {
-    .flags = ESP_NETIF_DHCP_SERVER | ESP_NETIF_FLAG_AUTOUP,
-    .ip_info = &ip_info,         // Debe apuntar a la IP estática configurada (e.g., 192.168.7.1)
-    .if_key  = "USB_NCM_AQ",
-    .if_desc = "AquaController USB NCM",
-    .route_prio = 50
-};
+if (event_base == USB_NET_EVENTS && event_id == USB_NET_UP) {
+    ESP_LOGI(TAG, "USB network is UP");
+    esp_netif_t *netif = usb_comms_get_netif_handle();
+    if (netif) {
+        esp_netif_up(netif);   // ← inicia DHCP server y autoconfig
+    }
+}
+Mantener arquitectura de capas:
 
-Referencia de Buenas Prácticas:
+Solo app_manager_aq orquesta; no lógica de red en servicios.
 
-Utiliza como guía el ejemplo chegewara/usb-netif/usb_netif_ncm.c, donde se activa el servidor DHCP con dicha bandera.
+usb_comms_aq sigue siendo caja negra que publica USB_NET_UP/USB_NET_DOWN.
 
-Checklist de Verificación (Auto-validación):
+Checklist de auto-validación:
 
-[ ] El campo .flags contiene ESP_NETIF_DHCP_SERVER | ESP_NETIF_FLAG_AUTOUP.
+ esp_netif_up() llamado exclusivamente tras USB_NET_UP.
 
-[ ] Después de flashear, el comando sudo dhclient usb0 en el host obtiene una dirección IP en menos de 2 segundos.
+ No se llama dos veces si la interfaz ya está arriba (usar esp_netif_is_netif_up() si se desea).
 
-[ ] El comando ip addr en el host muestra la interfaz usb0 con una dirección inet 192.168.7.x/24.
+ No rompe la secuencia de eventos existente.
 
 4. Formato de Salida Esperado
-Bloque de código completo (o un diff claro) para usb_comms_aq.c mostrando la estructura esp_netif_inherent_config_t corregida.
+Diff o bloque de código completo de app_manager_aq.c con la modificación.
 
-Comentarios explicativos in-line (estilo Doxygen).
+Comentarios Doxygen explicando por qué se llama esp_netif_up().
 
-Sección final de "Verificación" explicando cómo la corrección cumple con la checklist.
+Sección “Verificación” describiendo pruebas:
 
+Conectar MCU → sudo dhclient usb0 debe finalizar < 2 s.
+
+ip addr muestra usb0 inet 192.168.7.x/24.
+
+Log del ESP32:
+
+
+I APP_MANAGER_AQ: USB network is UP
+I APP_MANAGER_AQ: esp_netif_up() called – DHCP server started
 5. Referencias Específicas
-API esp_netif – Flags y DHCP: docs.espressif.com/projects/esp-idf/en/v5.5/esp32s3/api-reference/network/esp_netif.html
+API esp_netif_up() – IDF v5.5
 
-Ejemplo de Referencia: chegewara/usb-netif/usb_netif_ncm.c (GitHub).
+Ejemplo de referencia: chegewara/usb-netif/usb_netif_ncm.c – llamada a esp_netif_up() tras tud_mount_cb.
+

@@ -40,4 +40,11 @@ enum {
  */
 esp_err_t usb_netif_aq_start(void);
 
+/**
+ * @brief Gets the handle for the USB network interface.
+ *
+ * @return esp_netif_t* Handle to the esp_netif instance, or NULL if not initialized.
+ */
+esp_netif_t* usb_netif_get_handle(void);
+
 #endif // USB_NETIF_AQ_H
