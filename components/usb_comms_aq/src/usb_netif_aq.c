@@ -184,14 +184,19 @@ bool tud_network_recv_cb(const uint8_t *buffer, uint16_t len) {
 
 /**
  * @brief Invoked when the network link state changes (e.g., cable connected/disconnected).
+ *
+ * This function starts or stops the esp_netif actions and the DHCP server
+ * based on the link status.
  */
 void tud_network_link_state_cb(bool itf_up) {
     if (itf_up) {
         ESP_LOGI(TAG, "NCM network link is UP");
         esp_netif_action_start(s_netif_aq, NULL, 0, NULL);
+        ESP_ERROR_CHECK(esp_netif_dhcps_start(s_netif_aq));
         esp_event_post(USB_NET_EVENTS, USB_NET_UP, NULL, 0, portMAX_DELAY);
     } else {
         ESP_LOGI(TAG, "NCM network link is DOWN");
+        ESP_ERROR_CHECK(esp_netif_dhcps_stop(s_netif_aq));
         esp_event_post(USB_NET_EVENTS, USB_NET_DOWN, NULL, 0, portMAX_DELAY);
         esp_netif_action_stop(s_netif_aq, NULL, 0, NULL);
     }
