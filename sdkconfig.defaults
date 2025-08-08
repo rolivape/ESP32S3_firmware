@@ -1,0 +1,2 @@
+# Enable LWIP DHCP server
+CONFIG_LWIP_DHCPS=y

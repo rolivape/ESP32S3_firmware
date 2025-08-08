@@ -91,40 +91,51 @@ static void netif_driver_free_rx_buffer(void *h, void* buffer) {
 void tud_network_init_cb(void) {
     ESP_LOGI(TAG, "NCM network interface initialized");
 
-    // --- Set up the esp_netif stack for DHCP server ---
-    const esp_netif_ip_info_t ip_info = {
-        .ip = { .addr = ESP_IP4TOADDR( 192, 168, 7, 1) },
-        .gw = { .addr = ESP_IP4TOADDR( 192, 168, 7, 1) },
-        .netmask = { .addr = ESP_IP4TOADDR( 255, 255, 255, 0) },
-    };
-
-    const esp_netif_inherent_config_t inherent_cfg = {
-        .flags = ESP_NETIF_DHCP_SERVER | ESP_NETIF_FLAG_AUTOUP,
-        .ip_info = &ip_info,
-        .if_key = "USB_NCM",
-        .if_desc = "usb_ncm_netif",
-        .route_prio = 30
-    };
-
-    esp_netif_config_t cfg = {
-        .base = &inherent_cfg,
-        .driver = NULL, // Driver is set later
-        .stack = ESP_NETIF_NETSTACK_DEFAULT_ETH,
-    };
-
+    // --- Create esp_netif instance ---
+    esp_netif_config_t cfg = ESP_NETIF_DEFAULT_ETH();
     s_netif_aq = esp_netif_new(&cfg);
-    if (!s_netif_aq) {
-        ESP_LOGE(TAG, "Failed to create esp_netif instance");
-        return;
-    }
 
-    // --- Set up the driver IO functions ---
+    // --- Set up driver IO functions ---
     const esp_netif_driver_ifconfig_t driver_ifconfig = {
-        .handle = (void *)1, // Non-NULL handle
+        .handle = (void *)1,
         .transmit = netif_driver_transmit_aq,
         .driver_free_rx_buffer = netif_driver_free_rx_buffer
     };
     ESP_ERROR_CHECK(esp_netif_set_driver_config(s_netif_aq, &driver_ifconfig));
+
+    // --- Attach the driver to the netif ---
+    // The driver handle is also passed to the attach function.
+    void* driver_handle = &driver_ifconfig;
+    ESP_ERROR_CHECK(esp_netif_attach(s_netif_aq, driver_handle));
+
+    // --- Stop DHCP client and set static IP for the device ---
+    ESP_ERROR_CHECK(esp_netif_dhcpc_stop(s_netif_aq));
+    esp_netif_ip_info_t ip_info = {
+        .ip = { .addr = ESP_IP4TOADDR(192, 168, 7, 1) },
+        .gw = { .addr = ESP_IP4TOADDR(192, 168, 7, 1) },
+        .netmask = { .addr = ESP_IP4TOADDR(255, 255, 255, 0) },
+    };
+    ESP_ERROR_CHECK(esp_netif_set_ip_info(s_netif_aq, &ip_info));
+    ESP_LOGI(TAG, "Set static IP for device: 192.168.7.1");
+
+    // --- Start DHCP server for the host using public esp_netif API ---
+    ESP_LOGI(TAG, "Starting DHCP server...");
+    esp_netif_dhcp_option_id_t opt_op = ESP_NETIF_OP_SET;
+    // The DHCPS_OFFER_DNS option is defined as 1 in lwip/dhcps.h. We use the value directly
+    // to avoid including the private header.
+    uint8_t offer_dns = 1;
+    ESP_ERROR_CHECK(esp_netif_dhcps_option(s_netif_aq, opt_op, ESP_NETIF_DOMAIN_NAME_SERVER, &offer_dns, sizeof(offer_dns)));
+
+    // Set lease time
+    uint32_t lease_time_mins = 120;
+    ESP_ERROR_CHECK(esp_netif_dhcps_option(s_netif_aq, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME, &lease_time_mins, sizeof(lease_time_mins)));
+
+    esp_err_t start_err = esp_netif_dhcps_start(s_netif_aq);
+    if (start_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start DHCP server: %s", esp_err_to_name(start_err));
+    } else {
+        ESP_LOGI(TAG, "DHCP server started on %s", esp_netif_get_ifkey(s_netif_aq));
+    }
 
     // --- Set MAC address ---
     ESP_ERROR_CHECK(esp_read_mac(s_mac_address, ESP_MAC_WIFI_STA));
