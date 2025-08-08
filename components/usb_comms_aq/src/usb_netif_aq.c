@@ -12,15 +12,15 @@
 
 // --- Constants and Globals ---
 static const char *TAG = "USB_NETIF_AQ";
-static esp_netif_t *s_netif_aq = NULL;
-static uint8_t s_mac_address[6];
+esp_netif_t *s_netif_aq = NULL;
+uint8_t s_mac_address[6] __attribute__((used));
 
 // --- Event Base Definition ---
 ESP_EVENT_DEFINE_BASE(USB_NET_EVENTS);
 
 // --- Forward Declarations ---
-static esp_err_t netif_driver_transmit_aq(void *h, void *buffer, size_t len);
-static void netif_driver_free_rx_buffer(void *h, void* buffer);
+esp_err_t netif_driver_transmit_aq(void *h, void *buffer, size_t len) __attribute__((used));
+void netif_driver_free_rx_buffer(void *h, void* buffer) __attribute__((used));
 
 //--------------------------------------------------------------------+
 // Public API
@@ -41,6 +41,28 @@ esp_err_t usb_netif_aq_start(void) {
     };
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
 
+    // --- Inicialización de esp_netif para USB NCM ---
+    if (!s_netif_aq) {
+        esp_netif_inherent_config_t base_cfg = ESP_NETIF_INHERENT_DEFAULT_ETH();
+        base_cfg.if_desc = "usb-ncm";
+        base_cfg.route_prio = 30;
+        esp_netif_config_t cfg = ESP_NETIF_DEFAULT_ETH();
+        cfg.base = &base_cfg;
+        cfg.stack = ESP_NETIF_NETSTACK_DEFAULT_ETH;
+        s_netif_aq = esp_netif_new(&cfg);
+        if (!s_netif_aq) {
+            ESP_LOGE(TAG, "Failed to create esp_netif for USB NCM");
+            return ESP_FAIL;
+        }
+    }
+    // Registro del driver personalizado con esp_netif para NCM
+    esp_netif_driver_ifconfig_t driver_cfg = {
+        .handle = NULL,
+        .transmit = netif_driver_transmit_aq,
+        .driver_free_rx_buffer = netif_driver_free_rx_buffer,
+    };
+    ESP_ERROR_CHECK(esp_netif_set_driver_config(s_netif_aq, &driver_cfg));
+
     // The TinyUSB task is started automatically by the driver
 
     ESP_LOGI(TAG, "USB NCM interface started successfully.");
@@ -57,7 +79,7 @@ esp_err_t usb_netif_aq_start(void) {
  * This function is called by the TCP/IP stack when it wants to send a packet.
  * It passes the packet to the TinyUSB NCM driver.
  */
-static esp_err_t netif_driver_transmit_aq(void *h, void *buffer, size_t len) {
+esp_err_t netif_driver_transmit_aq(void *h, void *buffer, size_t len) {
     // Check if the network interface is ready to transmit
     if (!tud_network_can_xmit(len)) {
         return ESP_FAIL;
@@ -73,7 +95,7 @@ static esp_err_t netif_driver_transmit_aq(void *h, void *buffer, size_t len) {
  * This function is called by the TCP/IP stack to free a received buffer
  * after it has been processed.
  */
-static void netif_driver_free_rx_buffer(void *h, void* buffer) {
+void netif_driver_free_rx_buffer(void *h, void* buffer) {
     // The buffer was allocated by TinyUSB, so we use its free function.
     tud_network_recv_renew();
 }
@@ -81,71 +103,6 @@ static void netif_driver_free_rx_buffer(void *h, void* buffer) {
 //--------------------------------------------------------------------+
 // TinyUSB NCM Callbacks
 //--------------------------------------------------------------------+
-
-/**
- * @brief Invoked when the NCM network interface is initialized.
- *
- * This is the primary place where we set up the esp_netif instance,
- * as it's only called when the USB host has configured the device.
- * This function now configures and starts the DHCP server.
- */
-void tud_network_init_cb(void) {
-    ESP_LOGI(TAG, "NCM network interface initialized");
-
-    // --- Create esp_netif instance ---
-    esp_netif_config_t cfg = ESP_NETIF_DEFAULT_ETH();
-    s_netif_aq = esp_netif_new(&cfg);
-
-    // --- Set up driver IO functions ---
-    const esp_netif_driver_ifconfig_t driver_ifconfig = {
-        .handle = (void *)1,
-        .transmit = netif_driver_transmit_aq,
-        .driver_free_rx_buffer = netif_driver_free_rx_buffer
-    };
-    ESP_ERROR_CHECK(esp_netif_set_driver_config(s_netif_aq, &driver_ifconfig));
-
-    // --- Attach the driver to the netif ---
-    // The driver handle is also passed to the attach function.
-    void* driver_handle = (void*)&driver_ifconfig;
-    ESP_ERROR_CHECK(esp_netif_attach(s_netif_aq, driver_handle));
-
-    // --- Stop DHCP client and set static IP for the device ---
-    ESP_ERROR_CHECK(esp_netif_dhcpc_stop(s_netif_aq));
-    esp_netif_ip_info_t ip_info = {
-        .ip = { .addr = ESP_IP4TOADDR(192, 168, 7, 1) },
-        .gw = { .addr = ESP_IP4TOADDR(192, 168, 7, 1) },
-        .netmask = { .addr = ESP_IP4TOADDR(255, 255, 255, 0) },
-    };
-    ESP_ERROR_CHECK(esp_netif_set_ip_info(s_netif_aq, &ip_info));
-    ESP_LOGI(TAG, "Set static IP for device: 192.168.7.1");
-
-#if CONFIG_USBNET_DHCP_SERVER_EN
-    // --- Start DHCP server for the host using public esp_netif API ---
-    ESP_LOGI(TAG, "Starting DHCP server...");
-    esp_netif_dhcp_option_id_t opt_op = ESP_NETIF_OP_SET;
-    // The DHCPS_OFFER_DNS option is defined as 1 in lwip/dhcps.h. We use the value directly
-    // to avoid including the private header.
-    uint8_t offer_dns = 1;
-    ESP_ERROR_CHECK(esp_netif_dhcps_option(s_netif_aq, opt_op, ESP_NETIF_DOMAIN_NAME_SERVER, &offer_dns, sizeof(offer_dns)));
-
-    // Set lease time
-    uint32_t lease_time_mins = 120;
-    ESP_ERROR_CHECK(esp_netif_dhcps_option(s_netif_aq, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME, &lease_time_mins, sizeof(lease_time_mins)));
-
-    esp_err_t start_err = esp_netif_dhcps_start(s_netif_aq);
-    if (start_err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start DHCP server: %s", esp_err_to_name(start_err));
-    } else {
-        ESP_LOGI(TAG, "DHCP server started on %s", esp_netif_get_ifkey(s_netif_aq));
-    }
-#endif // CONFIG_USBNET_DHCP_SERVER_EN
-
-    // --- Set MAC address ---
-    ESP_ERROR_CHECK(esp_read_mac(s_mac_address, ESP_MAC_WIFI_STA));
-    s_mac_address[0] |= 0x02; // Set as locally administered address
-    s_mac_address[5] ^= 0x55;
-    ESP_ERROR_CHECK(esp_netif_set_mac(s_netif_aq, s_mac_address));
-}
 
 /**
  * @brief Invoked when a network packet is received from the USB host.
@@ -159,21 +116,22 @@ bool tud_network_recv_cb(const uint8_t* data, uint16_t len)
     return true;                          // TinyUSB puede reutilizar el buffer
 }
 
-
 /**
- * @brief Invoked when the network link state changes (e.g., cable connected/disconnected).
+ * @brief Invoked when a network packet has been transmitted.
  *
- * This function starts or stops the esp_netif actions and the DHCP server
- * based on the link status.
+ * This is a callback from the TinyUSB stack to indicate that a packet
+ * sent with tud_network_xmit() has been successfully transmitted.
+ * We don't need to do anything here, but the function must exist.
  */
-void tud_network_link_state_cb(bool itf_up) {
-    if (itf_up) {
-        ESP_LOGI(TAG, "NCM network link is UP");
-    } else {
-        ESP_LOGI(TAG, "NCM network link is DOWN");
-        esp_event_post(USB_NET_EVENTS, USB_NET_DOWN, NULL, 0, portMAX_DELAY);
-    }
+uint16_t tud_network_xmit_cb(uint8_t *dst, void *ref, uint16_t arg)
+{
+    (void)dst;
+    (void)ref;
+    (void)arg;
+    return 0;
 }
+
+// ...existing code...
 
 //--------------------------------------------------------------------+
 // TinyUSB Device Callbacks
