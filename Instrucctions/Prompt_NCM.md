@@ -1,127 +1,71 @@
+Prompt para Gemini CLI
+(formateado con la Plantilla_Promt.md y alineado al Documento Maestro v5.2 y al diseño USB-NCM v2.0)
 
-### 1. Contexto y Alcance
+1. Contexto y Alcance
+Proyecto: AquaControllerUSB v2.0 (ESP-IDF v5.5, ESP32-S3).
 
-- **Proyecto:** AquaControllerUSB_v2.0 (ESP-IDF v5.5, ESP32-S3).
-- **Modelo de Arquitectura:** Modular por capas, con wrapper de red `usb_netif_aq` inicializado desde `usb_comms_aq`.
-- **Stack de Comunicación:** USB-NCM sobre TinyUSB directo (no usar esp_tinyusb).
-- **Objetivo:** Habilitar una interfaz de red NCM con MAC dinámica válida para el host Linux, garantizando que `cdc_ncm` no falle con "failed to get mac address / bind() failure".
-- **Restricción crítica:** El descriptor debe incluir un campo `iMACAddress` válido que apunte a un string UTF-16LE de 12 caracteres hexadecimales (ej. `"A1B2C3D4E5F6"`), generado dinámicamente desde la MAC base del chip.
+Referencia Principal: Documento Maestro de Diseño y Arquitectura v5.2 y Documento de Diseño USB-NCM v2.0.
 
----
+Estado actual:
 
-### 2. Tarea Específica
+El hardware USB (DWC2 + TinyUSB) ya enumera correctamente.
 
-Implementar un módulo de red USB-NCM completo en ESP32-S3 con las siguientes características:
+usb_comms_aq crea la interfaz esp_netif, pero el host no recibe IP porque el servidor DHCP del ESP32 no arranca.
 
-- Definir todos los **descriptores TinyUSB** manualmente (no usar esp_tinyusb).
-- Implementar la función `tud_descriptor_string_cb()` para manejar strings dinámicos, en particular `iMACAddress`.
-- Leer la MAC base del chip (`esp_read_mac()`), derivar una dirección USB local-administered válida, convertirla a ASCII hex (sin separadores) y a UTF-16LE.
-- Incluir esta MAC como string descriptor en la tabla de descriptors y referenciar su índice en el descriptor CDC-NCM.
-- Inicializar TinyUSB correctamente (`tusb_init()`), exponer interfaz NCM y permitir uso con `esp_netif`.
+Meta Sprint 1: Tener una red USB-NCM 100 % funcional, con asignación dinámica de IP al host.
 
----
+2. Tarea Específica a Realizar
+Corregir la configuración de esp_netif en usb_comms_aq.c para que arranque el servidor DHCP interno.
 
-### 3. Estructura del Componente y Archivos Esperados
+3. Requisitos Técnicos y de Diseño
+Localización del error:
 
-- `usb_netif_aq.c` → Contendrá la inicialización de TinyUSB y del driver de red USB (NCM).
-- `usb_descriptors_aq.c` → Contendrá los descriptores USB completos, incluyendo `tud_descriptor_string_cb()`.
-- `usb_netif_aq.h`, `usb_descriptors_aq.h` → Interfaces públicas.
-- `CMakeLists.txt`, `idf_component.yml` → Configuración del componente.
+En components/usb_comms_aq/usb_comms_aq.c, busca la instancia de esp_netif_inherent_config_t (normalmente llamada s_inherent_cfg o similar).
 
----
+Corrección obligatoria:
 
-### 4. Pseudocódigo Detallado
+El campo .flags debe incluir ESP_NETIF_DHCP_SERVER y ESP_NETIF_FLAG_AUTOUP.
 
-#### **usb_descriptors_aq.c**
+Ejemplo de configuración deseada:
 
-```c
-// Índices para string descriptors
-enum {
-  STRID_LANGID = 0,
-  STRID_MANUFACTURER,
-  STRID_PRODUCT,
-  STRID_SERIAL,
-  STRID_MAC, // Este es iMACAddress
-  STRID_MAX
+c
+Copy
+Edit
+static esp_netif_inherent_config_t usb_if_inherent_cfg = {
+    .flags = ESP_NETIF_DHCP_SERVER | ESP_NETIF_FLAG_AUTOUP,
+    .ip_info = &ip_info,         // 192.168.7.1/24
+    .if_key  = "USB_NCM",
+    .if_desc = "usb_ncm_netif",
+    .route_prio = 30
 };
+Referencia de buenas prácticas:
 
-static char mac_str_ascii[13]; // "A1B2C3D4E5F6"
-static uint16_t _desc_str[32];
+Usar como guía el ejemplo chegewara/usb-netif/usb_netif_ncm.c, donde se activa el DHCP server con dicha bandera.
 
-// Generar MAC desde chip
-static void fill_mac_ascii_from_chip(void) {
-    uint8_t base[6], mac[6];
-    esp_read_mac(base, ESP_MAC_WIFI_STA);
-    mac[0] = base[0] | 0x02;  // Local-administered
-    mac[1] = base[1];
-    mac[2] = base[2];
-    mac[3] = base[3];
-    mac[4] = base[4];
-    mac[5] = base[5] ^ 0x55;
-    snprintf(mac_str_ascii, sizeof(mac_str_ascii), "%02X%02X%02X%02X%02X%02X",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-}
+Mantener arquitectura:
 
-// Callback requerido por TinyUSB
-uint16_t const* tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
-    const char* str;
-    switch (index) {
-        case STRID_LANGID:
-            _desc_str[1] = 0x0409; return _desc_str;
-        case STRID_MAC:
-            str = mac_str_ascii; break;
-        // otros casos STRID_MANUFACTURER, etc.
-    }
+No exponer TinyUSB fuera de usb_comms_aq.
 
-    // Convertir ASCII a UTF-16LE
-    uint8_t len = strlen(str);
-    for (uint8_t i = 0; i < len; i++) {
-        _desc_str[1 + i] = str[i];
-    }
-    _desc_str[0] = (TUSB_DESC_STRING << 8) | (2 * len + 2);
-    return _desc_str;
-}
-```
+Mantener la generación dinámica de la MAC y la tabla de strings.
 
-#### **usb_netif_aq.c**
+Checklist de verificación (auto-validación):
 
-```c
-void usb_netif_aq_start(void) {
-    // Generar MAC primero
-    fill_mac_ascii_from_chip();
+ .flags contiene ESP_NETIF_DHCP_SERVER | ESP_NETIF_FLAG_AUTOUP.
 
-    // Inicializar TinyUSB directamente
-    tusb_init();
+ Llamada a esp_netif_create_default_wifi_* no sustituye la interfaz USB; sólo se usa esp_netif_new() con la config corregida.
 
-    // Crear esp_netif y asignar driver
-    // (Este bloque depende del wrapper LWIP ↔ TinyUSB que ya tienes)
-}
-```
+ Después del flash, sudo dhclient usb0 en el host obtiene IP < 2 s.
 
----
+ ip addr muestra usb0 con inet 192.168.7.x/24.
 
-### 5. Requisitos Técnicos y Compatibilidad
+4. Formato de Salida Esperado
+Bloque de código completo (o diff claro) para usb_comms_aq.c con la estructura esp_netif_inherent_config_t corregida.
 
-- **TinyUSB API mínima**: `tusb_init()`, `tud_task()`, callbacks de descriptor.
-- **Compatibilidad OS:** Linux, macOS y Windows 10+ (NCM).
-- **No usar:** `esp_tinyusb` ni `descriptors_control.c`.
-- **Sí usar:** ESP-IDF v5.5 (`esp_read_mac`, `esp_log`, `esp_netif`, etc.).
-- **Licencia de TinyUSB**: BSD 3-Clause compatible.
+Comentarios explicativos in-line (Doxygen).
 
----
+Sección final “Verificación” explicando cómo la corrección cumple la checklist.
 
-### 6. Criterios de Validación
+5. Referencias Específicas
+API esp_netif – Flags y DHCP
 
-- [ ] El dispositivo se enumera correctamente como NCM.
-- [ ] `dmesg` en Linux ya no muestra `failed to get mac address`.
-- [ ] Aparece interfaz de red (`enx...`) al conectar.
-- [ ] IP puede ser asignada por RPi host o estática (ej: 192.168.7.2).
-- [ ] MAC generada es válida, local-administered, sin hardcode.
-
----
-
-### 7. Instrucción Final
-
-Genera todos los archivos necesarios (`usb_netif_aq.c/h`, `usb_descriptors_aq.c/h`) que implementen esta funcionalidad de forma modular, sin romper compatibilidad con el sistema de capas AquaController. El `main.c` solo debe llamar a `usb_comms_start()` o `usb_netif_aq_start()`.
-
-Incluye comentarios explicativos donde haya lógica no trivial. Garantiza compatibilidad con ESP-IDF v5.5.
+Ejemplo de referencia: chegewara/usb-netif/usb_netif_ncm.c (GitHub).

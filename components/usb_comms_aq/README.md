@@ -1,48 +1,36 @@
-# USB Communications AQ Component (`usb_comms_aq`)
+# USB Network Interface AQ (`usb_netif_aq`)
 
 ## Overview
 
-This component provides a high-performance USB networking service for ESP32-S3 devices, abstracting the TinyUSB stack to expose a standard `esp_netif` interface. It is designed for modularity and performance, focusing on the USB Network Control Model (NCM) for maximum compatibility and throughput with modern operating systems (Windows 10+, macOS, Linux).
+This component provides a high-performance USB networking service for ESP32-S3 devices. It implements the USB Network Control Model (NCM) directly on top of the TinyUSB stack, exposing a standard `esp_netif` interface for seamless integration into the ESP-IDF ecosystem.
+
+This component is designed for full control and robustness, avoiding the high-level `esp_tinyusb` wrapper in favor of a direct implementation.
 
 ## Features
 
-- **`esp_netif` Integration**: Exposes USB networking as a standard network interface, allowing seamless integration with other network services like MQTT, HTTP, etc.
-- **High-Performance**: Utilizes asynchronous, zero-copy transmission and a dedicated task to manage data flow, optimized for high throughput.
-- **NCM Protocol**: Uses the modern NCM protocol for efficient packet aggregation.
-- **Event-Driven**: Publishes `USB_NET_UP` and `USB_NET_DOWN` events to the `USB_NET_EVENTS` event base, allowing other application components to react to changes in USB connection state.
-- **Static IP**: Configured with a default static IP address (`192.168.7.1`) for predictable network access.
-- **Optimized**: Critical callbacks are placed in IRAM to reduce latency.
-
-### MAC Address and USB Descriptors
-
-To ensure stable and correct USB enumeration, this component uses a full set of custom USB descriptors defined in `src/tusb_descriptors_aq.c`. This approach provides explicit control over the device's identity and capabilities, resolving potential issues with host OS compatibility.
-
-- **Device Descriptor**: Identifies the device with a unique Vendor ID (Espressif) and a custom Product ID.
-- **Configuration Descriptor**: Defines the device as a CDC-NCM network interface.
-- **String Descriptors**: Provides human-readable strings for the Manufacturer, Product, and a unique Serial Number derived from the device's eFuse MAC address.
-
-This manual configuration ensures that the MAC address is correctly exposed to the host, fixing the "failed to get mac address" error and guaranteeing a reliable network connection.
+- **Direct TinyUSB Implementation**: Bypasses `esp_tinyusb` to provide direct control over the USB stack, descriptors, and low-level hardware configuration.
+- **`esp_netif` Integration**: Exposes the USB network as a standard `esp_netif` interface, allowing it to work with standard TCP/IP applications (MQTT, HTTP, etc.).
+- **Dynamic MAC Address**: Generates a unique, locally-administered MAC address from the chip's eFuse MAC, ensuring no two devices have the same network identity.
+- **Custom Descriptors**: Implements a full set of custom USB descriptors in `usb_descriptors_aq.c` to ensure correct enumeration and compatibility with host operating systems (Linux, macOS, Windows). This resolves the common "failed to get mac address" error.
+- **Manual PHY Initialization**: Explicitly initializes the ESP32-S3's internal USB PHY, ensuring the hardware is correctly configured before the TinyUSB stack is started.
+- **Event-Driven**: Publishes `USB_NET_UP` and `USB_NET_DOWN` events to the `USB_NET_EVENTS` event base.
 
 ## API
 
-### `esp_err_t usb_comms_start(void);`
+### `esp_err_t usb_netif_aq_start(void);`
 
-Initializes and starts the USB communications service. This function sets up the TinyUSB stack, creates the `esp_netif` instance, and starts the dedicated communication task.
-
-### `esp_netif_t* usb_comms_get_netif_handle(void);`
-
-Retrieves a handle to the underlying `esp_netif_t` instance. This handle can be used with other ESP-IDF networking APIs. Returns `NULL` if the service has not been started.
-
-## Configuration
-
-The component can be enabled or disabled via `menuconfig`:
-
-`Component config` -> `USB Comms AQ Configuration` -> `[*] Enable USB Comms AQ Service`
+Initializes and starts the USB network interface. This function performs the following key steps:
+1.  Generates the dynamic MAC address string for the USB descriptor.
+2.  Manually initializes the internal USB PHY.
+3.  Initializes the TinyUSB stack (`tusb_init`).
+4.  Creates a dedicated FreeRTOS task to run the TinyUSB event handler (`tud_task`).
 
 ## Usage Example
 
+The component is started by the `app_manager_aq`. The application can listen for USB network events as follows:
+
 ```c
-#include "usb_comms_aq.h"
+#include "usb_netif_aq.h"
 #include "esp_event.h"
 #include "esp_log.h"
 
@@ -51,8 +39,7 @@ static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_
     if (event_base == USB_NET_EVENTS) {
         if (event_id == USB_NET_UP) {
             ESP_LOGI("main", "USB network is UP");
-            esp_netif_t* netif = usb_comms_get_netif_handle();
-            // You can now use the netif handle
+            // The network is now ready for use.
         } else if (event_id == USB_NET_DOWN) {
             ESP_LOGI("main", "USB network is DOWN");
         }
@@ -61,20 +48,17 @@ static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_
 
 void app_main(void)
 {
-    // Initialize event loop and register handler for USB events
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    ESP_ERROR_CHECK(esp_event_handler_register(USB_NET_EVENTS, ESP_EVENT_ANY_ID, &event_handler, NULL));
+    // The app_manager_start() function initializes and starts the USB interface.
+    app_manager_start();
 
-    // Start the USB communications service
-    ESP_ERROR_CHECK(usb_comms_start());
+    // You can register event handlers to react to network status changes.
+    ESP_ERROR_CHECK(esp_event_handler_register(USB_NET_EVENTS, ESP_EVENT_ANY_ID, &event_handler, NULL));
 }
 ```
 
-## Performance
+## Technical Details
 
-- **Expected Throughput**: 1-6 Mbps, dependent on host OS and system load.
-- **IRAM Usage**: `IRAM_ATTR` is surgically applied to performance-critical TinyUSB callbacks (`tud_mount_cb`, `tud_umount_cb`, `tud_network_recv_cb`, `tud_network_xmit_cb`) to minimize latency without excessive IRAM consumption. Use `idf.py size` to analyze the impact.
-
-## Testing
-
-Integration testing can be performed using `iperf3` to measure network throughput between the ESP32-S3 and a connected host computer. Wireshark can be used to inspect the NCM traffic.
+The component relies on a set of callbacks from TinyUSB to function:
+- `tud_descriptor_..._cb()`: Provide the custom device, configuration, and string descriptors to the host.
+- `tud_network_..._cb()`: Handle the NCM network interface initialization, link status changes, and packet reception. These callbacks form the glue layer between TinyUSB and `esp_netif`.
+- `tud_mount_cb()` / `tud_umount_cb()`: Log device connection and disconnection events.

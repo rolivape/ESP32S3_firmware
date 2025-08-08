@@ -8,11 +8,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/pbuf.h"
+#include "esp_private/usb_phy.h"
 
 // --- Constants and Globals ---
 static const char *TAG = "USB_NETIF_AQ";
 static esp_netif_t *s_netif_aq = NULL;
 static uint8_t s_mac_address[6];
+static usb_phy_handle_t s_phy_handle; // Handle for the USB PHY
 
 // --- Event Base Definition ---
 ESP_EVENT_DEFINE_BASE(USB_NET_EVENTS);
@@ -21,6 +23,7 @@ ESP_EVENT_DEFINE_BASE(USB_NET_EVENTS);
 static void tinyusb_task(void *arg);
 static esp_err_t netif_driver_transmit_aq(void *h, void *buffer, size_t len);
 static void netif_driver_free_rx_buffer(void *h, void* buffer);
+static void init_usb_phy(void);
 
 //--------------------------------------------------------------------+
 // Public API
@@ -32,6 +35,9 @@ esp_err_t usb_netif_aq_start(void) {
     // Generate the MAC address string needed for the descriptor
     fill_mac_ascii_from_chip();
 
+    // Initialize the USB PHY hardware
+    init_usb_phy();
+
     // Initialize the TinyUSB stack
     ESP_LOGI(TAG, "Initializing TinyUSB stack");
     tusb_init();
@@ -42,6 +48,23 @@ esp_err_t usb_netif_aq_start(void) {
     ESP_LOGI(TAG, "USB NCM interface started successfully.");
     return ESP_OK;
 }
+
+//--------------------------------------------------------------------+
+// USB PHY Initialization
+//--------------------------------------------------------------------+
+static void init_usb_phy(void) {
+    ESP_LOGI(TAG, "Initializing USB PHY");
+    // Configuration for the internal USB PHY
+    usb_phy_config_t phy_config = {
+        .controller = USB_PHY_CTRL_OTG,
+        .target = USB_PHY_TARGET_INT,
+        .otg_mode = USB_OTG_MODE_DEVICE,
+        .otg_speed = USB_PHY_SPEED_HIGH, // High speed for NCM
+        .otg_io_conf = NULL, // Not needed for internal PHY
+    };
+    ESP_ERROR_CHECK(usb_new_phy(&phy_config, &s_phy_handle));
+}
+
 
 //--------------------------------------------------------------------+
 // TinyUSB Task
@@ -95,12 +118,32 @@ static void netif_driver_free_rx_buffer(void *h, void* buffer) {
  *
  * This is the primary place where we set up the esp_netif instance,
  * as it's only called when the USB host has configured the device.
+ * This function now configures and starts the DHCP server.
  */
 void tud_network_init_cb(void) {
     ESP_LOGI(TAG, "NCM network interface initialized");
 
-    // --- Create and configure esp_netif ---
-    esp_netif_config_t cfg = ESP_NETIF_DEFAULT_ETH();
+    // --- Set up the esp_netif stack for DHCP server ---
+    const esp_netif_ip_info_t ip_info = {
+        .ip = { .addr = ESP_IP4TOADDR( 192, 168, 7, 1) },
+        .gw = { .addr = ESP_IP4TOADDR( 192, 168, 7, 1) },
+        .netmask = { .addr = ESP_IP4TOADDR( 255, 255, 255, 0) },
+    };
+
+    const esp_netif_inherent_config_t inherent_cfg = {
+        .flags = ESP_NETIF_DHCP_SERVER | ESP_NETIF_FLAG_AUTOUP,
+        .ip_info = &ip_info,
+        .if_key = "USB_NCM",
+        .if_desc = "usb_ncm_netif",
+        .route_prio = 30
+    };
+
+    esp_netif_config_t cfg = {
+        .base = &inherent_cfg,
+        .driver = NULL, // Driver is set later
+        .stack = ESP_NETIF_NETSTACK_DEFAULT_ETH,
+    };
+
     s_netif_aq = esp_netif_new(&cfg);
     if (!s_netif_aq) {
         ESP_LOGE(TAG, "Failed to create esp_netif instance");
@@ -115,18 +158,11 @@ void tud_network_init_cb(void) {
     };
     ESP_ERROR_CHECK(esp_netif_set_driver_config(s_netif_aq, &driver_ifconfig));
 
-    // --- Set MAC and IP configuration ---
+    // --- Set MAC address ---
     ESP_ERROR_CHECK(esp_read_mac(s_mac_address, ESP_MAC_WIFI_STA));
     s_mac_address[0] |= 0x02; // Set as locally administered address
     s_mac_address[5] ^= 0x55;
     ESP_ERROR_CHECK(esp_netif_set_mac(s_netif_aq, s_mac_address));
-
-    esp_netif_ip_info_t ip_info;
-    ESP_ERROR_CHECK(esp_netif_str_to_ip4("192.168.7.1", &ip_info.ip));
-    ESP_ERROR_CHECK(esp_netif_str_to_ip4("192.168.7.1", &ip_info.gw));
-    ESP_ERROR_CHECK(esp_netif_str_to_ip4("255.255.255.0", &ip_info.netmask));
-    ESP_ERROR_CHECK(esp_netif_dhcpc_stop(s_netif_aq));
-    ESP_ERROR_CHECK(esp_netif_set_ip_info(s_netif_aq, &ip_info));
 }
 
 /**
