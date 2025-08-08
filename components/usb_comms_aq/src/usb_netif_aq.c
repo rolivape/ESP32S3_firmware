@@ -133,9 +133,9 @@ void tud_network_init_cb(void) {
     const esp_netif_inherent_config_t inherent_cfg = {
         .flags = ESP_NETIF_DHCP_SERVER | ESP_NETIF_FLAG_AUTOUP,
         .ip_info = &ip_info,
-        .if_key = "USB_NCM",
-        .if_desc = "usb_ncm_netif",
-        .route_prio = 30
+        .if_key = "USB_NCM_AQ",
+        .if_desc = "AquaController USB NCM",
+        .route_prio = 50
     };
 
     esp_netif_config_t cfg = {
