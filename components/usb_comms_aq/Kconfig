@@ -1,13 +1,12 @@
-# Kconfig for usb_comms_aq component
+menu "USB Network Component Configuration"
 
-menu "USB Comms AQ Configuration"
-    depends on TINYUSB_ENABLED
-
-    config COMPONENT_USB_COMMS_AQ_ENABLED
-        bool "Enable USB Comms AQ Service"
-        default y
-        help
-            Enable this option to initialize the USB Communications service,
-            providing an NCM-based network interface.
+config USBNET_DHCP_SERVER_EN
+    bool "Enable DHCP Server for USB NCM"
+    default y
+    select LWIP_DHCPS
+    help
+        If selected, the USB NCM interface will start a DHCP server to assign
+        an IP address to the connected host. This requires the main LWIP DHCP
+        server option (CONFIG_LWIP_DHCPS) to be enabled.
 
 endmenu

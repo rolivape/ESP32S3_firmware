@@ -1,4 +1,5 @@
 #include "usb_netif_aq.h"
+#include "usb_ncm_cb_aq.h"
 #include "usb_descriptors_aq.h"
 #include "tinyusb.h"
 #include "esp_log.h"
@@ -105,7 +106,7 @@ void tud_network_init_cb(void) {
 
     // --- Attach the driver to the netif ---
     // The driver handle is also passed to the attach function.
-    void* driver_handle = &driver_ifconfig;
+    void* driver_handle = (void*)&driver_ifconfig;
     ESP_ERROR_CHECK(esp_netif_attach(s_netif_aq, driver_handle));
 
     // --- Stop DHCP client and set static IP for the device ---
@@ -118,6 +119,7 @@ void tud_network_init_cb(void) {
     ESP_ERROR_CHECK(esp_netif_set_ip_info(s_netif_aq, &ip_info));
     ESP_LOGI(TAG, "Set static IP for device: 192.168.7.1");
 
+#if CONFIG_USBNET_DHCP_SERVER_EN
     // --- Start DHCP server for the host using public esp_netif API ---
     ESP_LOGI(TAG, "Starting DHCP server...");
     esp_netif_dhcp_option_id_t opt_op = ESP_NETIF_OP_SET;
@@ -136,6 +138,7 @@ void tud_network_init_cb(void) {
     } else {
         ESP_LOGI(TAG, "DHCP server started on %s", esp_netif_get_ifkey(s_netif_aq));
     }
+#endif // CONFIG_USBNET_DHCP_SERVER_EN
 
     // --- Set MAC address ---
     ESP_ERROR_CHECK(esp_read_mac(s_mac_address, ESP_MAC_WIFI_STA));
