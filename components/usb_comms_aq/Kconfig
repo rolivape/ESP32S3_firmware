@@ -1,12 +1,4 @@
-menu "USB Network Component Configuration"
+# Kconfig for usb_comms_aq component
 
-config USBNET_DHCP_SERVER_EN
-    bool "Enable DHCP Server for USB NCM"
-    default y
-    select LWIP_DHCPS
-    help
-        If selected, the USB NCM interface will start a DHCP server to assign
-        an IP address to the connected host. This requires the main LWIP DHCP
-        server option (CONFIG_LWIP_DHCPS) to be enabled.
-
-endmenu
+# The DHCP server is now started unconditionally when the USB network is up.
+# This configuration option is no longer needed.

@@ -1,12 +1,17 @@
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
 #include "app_manager_aq.h"
-#include "usb_descriptors_aq.h"
-#include <stdbool.h>
-#include <stdint.h>
 
-
-
+static const char *TAG = "main";
 
 void app_main(void)
 {
+    ESP_LOGI(TAG, "Calling app_main()");
     app_manager_start();
+
+    // app_main should not return
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 }

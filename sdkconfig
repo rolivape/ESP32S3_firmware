@@ -2221,12 +2221,6 @@ CONFIG_WIFI_PROV_STA_ALL_CHANNEL_SCAN=y
 # end of Wi-Fi Provisioning Manager
 
 #
-# USB Network Component Configuration
-#
-CONFIG_USBNET_DHCP_SERVER_EN=y
-# end of USB Network Component Configuration
-
-#
 # TinyUSB Stack
 #
 CONFIG_TINYUSB_DEBUG_LEVEL=2
