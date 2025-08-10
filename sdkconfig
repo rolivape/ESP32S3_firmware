@@ -2221,6 +2221,11 @@ CONFIG_WIFI_PROV_STA_ALL_CHANNEL_SCAN=y
 # end of Wi-Fi Provisioning Manager
 
 #
+# USB NCM Configuration
+#
+# end of USB NCM Configuration
+
+#
 # TinyUSB Stack
 #
 CONFIG_TINYUSB_DEBUG_LEVEL=2

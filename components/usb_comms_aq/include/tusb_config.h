@@ -20,7 +20,6 @@
 // USB-NCM CLASS CONFIGURATION
 //--------------------------------------------------------------------
 #define CFG_TUD_NCM                 1
-// CFG_TUD_NET_ENDPOINT_SIZE is defined by the stack based on speed
 #define CFG_TUD_NCM_MAX_SEGMENT_SIZE 1514
 #define CFG_TUD_NCM_IN_NTB_MAX_SIZE (4 * 1024)
 #define CFG_TUD_NCM_OUT_NTB_MAX_SIZE (4 * 1024)

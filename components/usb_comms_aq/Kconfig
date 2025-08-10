@@ -1,4 +1,9 @@
-# Kconfig for usb_comms_aq component
+menu "USB NCM Configuration"
 
-# The DHCP server is now started unconditionally when the USB network is up.
-# This configuration option is no longer needed.
+config LWIP_DHCPS
+    bool "Enable DHCP server"
+    default y
+    help
+        Enable DHCP server for USB NCM host auto-IP.
+
+endmenu

@@ -1,0 +1,30 @@
+Plantilla_Prompt.md - Instancia for Componente: usb_comms_aq (Fase 1: Levantar DHCP Básico Unconditional)
+Contexto del Proyecto and Referencias:
+
+Documento Maestro v5.2: Enfatiza robustez in usb_comms_aq with DHCP server for IPv4 auto. Anti-patrones: Evitar conditionals skip; priorizar unconditional for testing, then NVS.
+Component_USB-NCM.md v2.0: Tuning lwIP: CONFIG_LWIP_DHCPS=y in Kconfig, call esp_netif_dhcps_start in code for host IP (pool 192.168.7.100-254).
+Objetivos del Sprint 1: Levantar DHCP básico for confirm IP auto, before NVS fallback.
+
+Tarea Específica:
+Refactoriza usb_comms_aq for make DHCP server start unconditional (remove custom conditional, always call if CONFIG_LWIP_DHCPS=y), adding debug logs to confirm start and errors, enabling IPv4 auto in host.
+Requisitos de Código y Estilo:
+
+Remove #if CONFIG_USBNET_DHCP_SERVER_EN; make esp_netif_dhcps_start always called after esp_netif_set_ip_info (static IP 192.168.7.1/24).
+Add: esp_err_t err = esp_netif_dhcps_start(netif); if (err == ESP_OK) ESP_LOGI(TAG, "DHCP server started on %s", esp_netif_get_ifkey(netif)); else ESP_LOGE(TAG, "Failed to start DHCP server: %d", err).
+Option for DNS: esp_netif_dhcps_option(netif, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &offer, sizeof(offer)); with dhcps_offer_t offer = DHCPS_OFFER_DNS.
+Lease time: uint32_t lease_time = 120; esp_netif_dhcps_option(netif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME, &lease_time, sizeof(lease_time)).
+sdkconfig: Verify CONFIG_LWIP_DHCPS=y; add in sdkconfig.defaults if not, run idf.py reconfigure.
+Convención: Sufijo _aq. esp_err_t for errors.
+Dependencias: PRIV_REQUIRES lwip esp_netif.
+
+Pruebas Requeridas:
+
+Build: idf.py reconfigure && idf.py build sin errors.
+Integración: Flashea; monitor with "DHCP server started" log, dmesg clean, dhclient usb0 assigns inet 192.168.7.x/24, ping 192.168.7.1 exitoso, iperf3 throughput 1-6Mbps.
+CI: Matriz IDF 5.4/5.5.
+
+Entregables:
+
+Código in PR a rama feature/dhcp-basic-usb-comms in https://github.com/rolivape/esp32s3_firmware.
+README.md with note on unconditional start, logs monitor/dmesg/ip addr pre/post.
+Reporte métricas: IRAM usage.
