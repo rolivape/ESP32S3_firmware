@@ -17,12 +17,9 @@
 #define CFG_TUD_ENDPOINT0_SIZE      64
 
 //--------------------------------------------------------------------
-// USB-NCM CLASS CONFIGURATION
+// USB-CDC CLASS CONFIGURATION
 //--------------------------------------------------------------------
-#define CFG_TUD_NCM                 1
-// CFG_TUD_NET_ENDPOINT_SIZE is defined by the stack based on speed
-#define CFG_TUD_NCM_MAX_SEGMENT_SIZE 1514
-#define CFG_TUD_NCM_IN_NTB_MAX_SIZE (4 * 1024)
-#define CFG_TUD_NCM_OUT_NTB_MAX_SIZE (4 * 1024)
+#define CFG_TUD_CDC                 1
+#define CFG_TUD_ECM_RNDIS           1
 
 #endif // _TUSB_CONFIG_H_

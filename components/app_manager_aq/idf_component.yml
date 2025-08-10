@@ -4,4 +4,3 @@ dependencies:
     path: ../usb_comms_aq
   idf:
     version: ">=5.3"
-

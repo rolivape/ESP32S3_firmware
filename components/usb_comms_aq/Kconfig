@@ -1,4 +1,0 @@
-# Kconfig for usb_comms_aq component
-
-# The DHCP server is now started unconditionally when the USB network is up.
-# This configuration option is no longer needed.
