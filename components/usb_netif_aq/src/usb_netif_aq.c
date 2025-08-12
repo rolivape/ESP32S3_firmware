@@ -15,7 +15,7 @@
 static const char *TAG = "usb_netif_aq";
 
 #define RX_QUEUE_SIZE 10
-#define RX_TASK_STACK_SIZE 4096
+#define RX_TASK_STACK_SIZE 8192
 
 // Contexto del driver de bajo nivel (tinyusb)
 typedef struct {
