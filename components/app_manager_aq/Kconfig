@@ -1,0 +1,10 @@
+menu "Application Manager"
+
+    config AQ_COMMS_WAIT_MS
+        int "Timeout for waiting for IP address (ms)"
+        range 1000 30000
+        default 8000
+        help
+            Timeout in milliseconds to wait for the USB network interface to get an IP address.
+
+endmenu

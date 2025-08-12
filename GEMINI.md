@@ -18,7 +18,7 @@ Modularidad: Cada pieza de funcionalidad debe estar encapsulada en su propio com
 
 Código Limpio y Documentado:
 
-Estilo: Todo el código debe ser formateado con clang-format.
+Estilo: Todo el código debe ser formado con clang-format.
 
 Documentación: Todas las funciones públicas, structs y enums deben estar documentadas usando comentarios estilo Doxygen.
 
@@ -64,5 +64,19 @@ Análisis de Errores de Compilación: Si la compilación falla, no intentes solu
 Estrategia de Solución: Propón una o más soluciones específicas y justificadas. Explica cómo cada solución resuelve el error y se alinea con nuestros documentos de diseño. Espera la aprobación del Chief Programmer & PMO antes de implementar la corrección.
 
 Referencia Estricta a ESP-IDF v5.5: Toda solución, análisis y referencia a la API debe corresponder exclusivamente a la documentación de ESP-IDF v5.5. Está prohibido utilizar funciones, componentes o workarounds de otras versiones.
+
+**6. Directivas Técnicas Adicionales (Aprendizajes del Proyecto)**
+
+*   **Error Fatal: Crash en `esp_netif_attach` (InstructionFetchError / MMU Fault)**: Este crash ocurre cuando la estructura pasada a `esp_netif_attach()` no sigue el patrón esperado por el framework. La función espera un "handle de driver" genérico (`void *`) cuyo primer miembro **debe ser** una estructura `esp_netif_driver_base_t`. El framework lee el puntero a la función `post_attach` desde el offset 0 de esta estructura base. Si el primer miembro es un puntero a datos (como un handle a un contexto de driver), `esp_netif` intentará ejecutar esa dirección de memoria, causando un crash fatal. La evidencia clave es un `PC` (Program Counter) en el log de crash que coincide con la dirección del handle del driver.
+    *   **Patrón de Implementación Correcto:**
+        1.  Define una estructura de driver personalizada (ej. `mi_driver_t`) que contenga `esp_netif_driver_base_t base;` como su **primer y principal miembro**.
+        2.  Implementa una función `post_attach` que coincida con la firma `esp_err_t (*)(esp_netif_t *, void *)`.
+        3.  Dentro de `post_attach`, crea una estructura `esp_netif_driver_ifconfig_t` con los punteros a tus funciones de E/S (`transmit`, `driver_free_rx_buffer`).
+        4.  Llama a `esp_netif_set_driver_config(esp_netif, &ifconfig);` para registrar tus callbacks de E/S.
+        5.  En tu código de inicialización, crea una instancia estática de tu estructura de driver personalizada, asigna tu función `post_attach` a su miembro `.base.post_attach`, y pasa un puntero a esta estructura a `esp_netif_attach()`.
+
+*   **Crash por Corrupción de Stack (Patrón ISR-Task)**: Un crash de tipo `Cache error` o `MMU entry fault` con un backtrace corrupto después de inicializar un driver de red (como TinyUSB) es un síntoma clásico de corrupción de stack. Ocurre cuando una función de API (ej. `esp_netif_receive()`) es llamada desde un contexto de callback o ISR incorrecto. La solución es implementar el patrón **ISR-Task**: el callback/ISR debe hacer el mínimo trabajo posible (copiar datos a una cola) y notificar a una tarea dedicada de alta prioridad. Esta tarea es la única que debe llamar a funciones de API complejas como `esp_netif_receive()`.
+
+*   **Inclusión de Cabeceras de `esp_netif`**: El fichero `esp_netif_driver.h` no existe en la ruta de inclusión pública de ESP-IDF v5.x. Los tipos necesarios (`esp_netif_driver_ifconfig_t`, `esp_netif_transmit_fn`, `esp_netif_driver_base_t`) se encuentran en `esp_netif.h` y `esp_netif_types.h`. Para que el compilador las encuentre, asegúrate de incluir estas cabeceras y de que el `CMakeLists.txt` del componente tiene la dependencia `PRIV_REQUIRES esp_netif`.
 
 Tu objetivo es producir código que no solo funcione, sino que sea legible, mantenible, fiel a la arquitectura definida y esté verificado.

@@ -1,5 +1,5 @@
-idf_component_register(SRCS "src/usb_netif_aq.c" "src/usb_descriptors_aq.c" "src/usb_ncm_cb_aq.c" "src/tud_network_recv_cb_weak.c" "src/tud_network_xmit_cb_weak.c"
+idf_component_register(SRCS "src/usb_comms_aq.c"
                     INCLUDE_DIRS "include"
-                    REQUIRES espressif__esp_tinyusb esp_netif usb
+                    REQUIRES usb_netif_aq esp_event esp_netif
                     PRIV_REQUIRES lwip)
 
