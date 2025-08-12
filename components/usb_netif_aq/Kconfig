@@ -1,0 +1,12 @@
+menu "usb_netif_aq"
+    config AQ_USB_USE_ECM_FALLBACK
+        bool "Usar ECM como fallback"
+        default n
+    config AQ_USB_HOSTNAME
+        string "Hostname USB"
+        default "esp32-usbncm"
+    config AQ_USB_LOG_LEVEL
+        int "Log level (0-5)"
+        range 0 5
+        default 3
+endmenu
